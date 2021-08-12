@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+
+<link href="css/jquery-ui.css" rel="stylesheet">
+<!--link href="css/theme.default.min.css" rel="stylesheet"-->
+<style style="text/css">
+	body {
+		font-size:9pt;
+		font-family:돋움, Dotum;
+		color:#000;
+		padding:5px 10px 5px 5px;
+	}
+
+	table {border-collapse:collapse;border:0;}
+	.list {line-height:1.3;word-break:break-all;width:100%}
+	.list thead tr th {
+		padding:8px 5px 8px 5px;
+		border-top:2px solid #5085c0;
+		border-bottom:2px solid #f4f4f4;
+		background:#FFF url(img/bg_slice.gif) no-repeat left bottom;
+		cursor:pointer;
+	}
+	.list thead tr th.thFirst {
+		background:#fff url(img/bg_slice.gif) no-repeat right bottom;
+	}
+	/* 5번째 row의 배경색을 변경 */
+	.list tbody tr:nth-child(5n) {background-color:#F5F5F5}
+	.list tbody tr td {padding:8px 5px 4px 5px;border-bottom:1px solid #e0e0e0;word-break:break-all;cursor:pointer;}
+	.list tbody .image,
+	.list tbody .year {text-align:center;font:Tahoma;padding-bottom:8px;}
+
+	#_listDiv {
+		position:relative;
+		z-index:100;
+		overflow-y:auto;
+		padding-bottom:5px;
+		border-bottom:1px solid #5085c0;
+		height:calc(100vh - 100px);
+	}
+
+	.focushover {
+		color:white;
+		opacity: 0.9;
+		filter: alpha(opacity=90); /* for IE */
+	}
+
+	.ui-progressbar {
+		position: relative;
+  }
+
+  .progress-label {
+    position: absolute;
+    left: 50%;
+    top: 4px;
+    font-weight: bold;
+    text-shadow: 1px 1px 0 #fff;
+  }
+
+	.ui-autocomplete {
+		max-height: 200px;
+		overflow-y: auto;
+		/* prevent horizontal scrollbar */
+		overflow-x: hidden;
+		/* add padding to account for vertical scrollbar */
+		padding-right: 20px;
+	}
+</style>
+
+<script type="text/javascript" src="./js/jquery.min.js"></script>
+<script type="text/javascript" src="./js/jquery-ui.min.js"></script>
+<script type="text/javascript" src="./js/xlsx.full.min.js"></script>
+<script type="text/javascript" src="./js/FileSaver.min.js"></script>
+<script type="text/javascript" src="./js/jquery.tablesorter.js"></script>
+
+<script>
+	var aCountry	= [];	// Table 영화 제작국가
+	var aDirector	= [];	// Table 영화 제작자
+	var aActor		= [];	// Table 영화 배우
+	var aYear			= [];	// Table 영화 제작년도
+	var cRow			= 0;	// Current Selected Row
+	var cSelKey		= ""	// 검색 키
+	var cSelWrd		= ""	// 검색 값
+
+	// IndexedDB initialize
+	var db = new function(){
+		window.indexedDB		= window.indexedDB || window.mozIndexedDB || window.webkitIndexedDB || window.msIndexedDB;
+		var IDBTransaction	= window.IDBTransaction || window.webkitIDBTransaction;
+		var IDBKeyRange			= window.IDBKeyRange || window.webkitIDBKeyRange;
+		var dataBaseName		= "decoyMovie";
+		var dataBaseVersion = 1;
+		var tIdx						= 1;
+
+		var store, idxDB, transaction, tmpDB;
+
+		_this = this;
+
+		try {
+			var req = window.indexedDB.open(dataBaseName, dataBaseVersion);
+					req.onupgradeneeded = function(event){
+						idxDB = event.target.result;
+
+						setTable(idxDB, 'listMovie', ['year', 'titleKor', 'titleEng', 'genre', 'country', 'director', 'actor']);
+						setTable(idxDB, 'arrActor');
+						setTable(idxDB, 'arrDirector');
+						setTable(idxDB, 'arrCountry');
+					}
+
+					req.onsuccess = function(event){
+						idxDB = event.target.result;
+						_this = setMethod();
+						init_work();
+					}
+		} catch(e) {}
+
+		function setTable(db, table, index) {
+			try {
+				store = db.createObjectStore(table, {keyPath:'idx',autoIncrement:true});
+
+				$.each(index, function(key, value){
+					store.createIndex(value, value, {unique:false});
+				});
+			} catch(e) {}
+		}
+
+		function setMethod(){
+			_this.getTable = function(table){
+				return idxDB.transaction([table], "readwrite").objectStore(table);
+			}
+
+			_this.insert = function(option){
+				res	= _this.getTable(option.table).add(option.column);
+				res.transaction.oncomplete = function() {
+					$("#progressbar").progressbar("value", parseInt(((tIdx++) / option.tMax) * 100));
+				}
+				if(option.success) res.onsuccess = option.success;
+				res.onerror = function(e){
+					msg_log(e.target.errorCode)
+				}
+			}
+
+			_this.update = function(option){
+				res = _this.getTable(option.table).put(option.column);
+				if(option.success) res.onsuccess = option.success;
+			}
+
+			_this.delete = function(option){
+				var idx = parseInt(option.idx);
+				res = _this.getTable(option.table).delete(idx);
+				if(option.success) res.onsuccess = option.success;
+			}
+
+			_this.clear = function(option){
+				res = _this.getTable(option.table).clear();
+				if(option.success) res.onsuccess = option.success;
+			}
+
+			_this.fetch = function(option){
+				res = _this.getTable(option.table);
+				if(option.idx){
+					var idx = parseInt(option.idx);
+					res.get(idx).onsuccess = option.success;
+				} else {
+					res.getAll().onsuccess = option.success;
+				}
+			}
+
+			_this.fetchSearchExport = function(option){
+				res = _this.getTable(option.table);
+
+				res.getAll().onsuccess = function(e) {
+					fn_Excel_Export(e.target.result);
+				}
+			}
+
+			_this.fetchSearch = function(option){
+				res = _this.getTable(option.table);
+
+				if(option.searchword.length) {
+					// 조건검색
+					var result = [];
+					var strKey = ""
+					var strWrd = (option.column == "year") ? option.searchword : "";
+
+					var range = IDBKeyRange.bound(strWrd, strWrd + "\uffff");
+					var index = res.index(option.column);
+							index.openCursor(range).onsuccess = function(e) {
+								var cursor = event.target.result;
+							  if (cursor) {
+									switch(option.column) {
+										case 'title'		: strKey = cursor.value.titleKor;	break;
+										case 'country'	: strKey = cursor.value.country;	break;
+										case 'director' : strKey = cursor.value.director;	break;
+										case 'actor' 		: strKey = cursor.value.actor;		break;
+										case 'year' 		: strKey = cursor.value.year;			break;
+									}
+
+									if(strKey.indexOf(option.searchword) >= 0) {
+								    result.push(
+								    	{
+								    		actor			: cursor.value.actor,
+								    		country		: cursor.value.country,
+								    		director	: cursor.value.director,
+								    		genre			: cursor.value.country,
+								    		titleKor	: cursor.value.titleKor,
+								    		year			: cursor.value.year
+								    	}
+								    )
+								  }
+							    cursor.continue();
+							  } else {
+							  	fn_redraw_tbody(result);
+							  }
+							}
+				} else {
+					// 전체 검색
+					res.getAll().onsuccess = function(e) {
+						fn_redraw_tbody(e.target.result);
+					}
+				}
+			}
+
+			return _this;
+		}
+	}
+
+	// Excel File Export
+	function fn_Excel_Export (e_obj) {
+		var toDay = dateFormat(new Date($.now()))
+		var	fileNm = '영화목록 ' + toDay.substring(0, 10).replace(/-/g, '') + ".xlsx";
+
+	  // step 1. workbook 생성
+	  var wb = XLSX.utils.book_new();
+		    wb.Props = {
+					Title: "Movie_List",
+					Subject: "Movie_List",
+					Author: "김형준",
+					Manager: "김형준",
+					Company: "House",
+					Category: "InMemory_Database",
+					Keywords: "InMemory_Database",
+					Comments: "SheetJS, InMenory Database, Table Sort",
+					LastAuthor: "김형준",
+					CreatedDate: toDay.substring(0, 10).replace(/-/g, '')
+		};
+
+		// step 2. 시트 만들기
+		var newWorksheet = XLSX.utils.json_to_sheet(e_obj);
+
+		// step 3. workbook에 새로만든 워크시트에 이름을 주고 붙인다.
+		XLSX.utils.book_append_sheet(wb, newWorksheet, 'movie');
+
+		// step 4. 엑셀 파일 만들기
+		var wbout = XLSX.write(wb, {bookType:'xlsx',  type: 'binary'});
+
+		// step 5. 엑셀 파일 내보내기
+//		saveAs(new Blob([s2ab(wbout)],{type:"application/octet-stream"}), fileNm);
+
+		// Data Export Information
+		$("#dialog-confirm p").html('<span class="ui-icon ui-icon-alert" style="float:left; margin:12px 12px 20px 0;"></span>' +
+																"[파일 이름] : " + fileNm + "<br>" +
+																"[백업 건수] : " + commaNumber(e_obj.length) + "건<br>" +
+																"- 저장위치 : 다운로드 폴더 ");
+		$( "#dialog-confirm" ).dialog({
+			title : '데이터 백업 결과',
+			resizable: false,
+      height: "auto",
+      width: 300,
+      modal: true,
+      buttons: {
+        "닫기": function() {
+          $( this ).dialog( "close" );
+        }
+      }
+    });
+	}
+
+	function s2ab(s) {
+	  var buf = new ArrayBuffer(s.length); //convert s to arrayBuffer
+	  var view = new Uint8Array(buf);  //create uint8array as viewer
+	  for (var i=0; i<s.length; i++) view[i] = s.charCodeAt(i) & 0xFF; //convert to octet
+	  return buf;
+	}
+
+	// Excel File Reading
+	function handleFile(e) {
+		//Get the files from Upload control
+		var files	= e.target.files;
+		var f			= files[0]
+
+		var reader = new FileReader();
+				reader.readAsBinaryString(f);
+				reader.onload = function (e) {
+					var data			= e.target.result;
+					var workbook	= XLSX.read(data, { type: 'binary' });
+					var roa				= XLSX.utils.sheet_to_json(workbook.Sheets["movie"]);
+
+					if (roa.length > 0) {
+						// 데이터가 있음
+						DialogMessage ("initTable");
+						$( "#dialog-confirm" ).dialog({
+				      closeOnEscape: false,
+							resizable: false,
+				      height: "auto",
+				      width: 300,
+				      modal: true,
+				      buttons: {
+				        "확인": function() {
+				        	$( this ).dialog( "close" );
+
+									msg_log("function handleFile")
+									msg_log("  > 파일 : " + f.name)
+									msg_log("  > 크기 : " + byteCalculation(f.size))
+									msg_log("  > 갯수 : " + commaNumber(roa.length))
+
+									// Table Clear
+									clearTable()
+
+									$( "#dialog" ).dialog( "open" );
+									event.preventDefault();
+
+									roa.forEach(function(e) {
+										var option = {
+											table : "listMovie",
+											tMax : roa.length,
+											column:{
+												year:e.year,
+												titleKor:e.titleKor,
+												titleEng:e.titleEng,
+												genre:e.genre,
+												country:e.country,
+												director:e.director,
+												actor:e.actor
+											}
+										}
+										db.insert(option);
+									});
+
+									init_work();
+				        },
+				        "취소": function() {
+				          $( this ).dialog( "close" );
+				        }
+				      }
+				    });
+					} else {
+						// 시트가 없거나, 데이터가 없음
+						DialogMessage ("errorTable");
+						$( "#dialog-confirm" ).dialog({
+							resizable: false,
+				      height: "auto",
+				      width: 300,
+				      modal: true,
+				      buttons: {
+				        "닫기": function() {
+				          $( this ).dialog( "close" );
+				        }
+				      }
+				    });
+					}
+				};
+
+				//Close Option Dialog Box
+				$( "#dialog-option").dialog ("close");
+	}
+
+	// Remove Duplicate Element in Array
+	function fn_RemoveDuplicateElement(aData) {
+		var aTmp	= [];
+
+		$.each(aData, function(key, value){
+			if($.inArray(value.replace(/^\s+|\s+$/g,""), aTmp) === -1 && value.length > 0 ) aTmp.push(value.replace(/^\s+|\s+$/g,""));
+		});
+
+		return aTmp.sort();
+	}
+
+	// Data Loading
+	function init_work() {
+		// 영화목록을 읽어온다.
+		$("#tblBody tr").remove();
+		db.fetch({table:'listMovie',success:function(event){
+			$.each(event.target.result, function(key, e){
+				aActor.push(e.actor);
+				aCountry.push(e.country);
+				aDirector.push(e.director);
+				aYear.push(e.year);
+			});
+
+			// 배열
+			aActor		= fn_RemoveDuplicateElement(aActor.join(", ").split(", "));			// 배우
+			aYear			= fn_RemoveDuplicateElement(aYear.join(", ").split(", "));			// 년도
+			aCountry	= fn_RemoveDuplicateElement(aCountry.join(", ").split(", "));		// 국가
+			aDirector	= fn_RemoveDuplicateElement(aDirector.join(", ").split(", "));	// 감독
+
+			fn_redraw_tbody(event.target.result);
+		}})
+	}
+
+  $(document).ready(function(){
+  	// 초기값 세팅
+		cSelKey = $("#selKey option:selected").val();
+		selWrd = ""
+
+    $('#files').change(handleFile);
+
+		$("#tblMovie").tablesorter();
+
+		$('#hTable thead tr th').click(function(e){
+			$("#tblMovie thead th:eq(" + e.target.cellIndex + ")").trigger("click");
+		});
+
+		// Button Click (Save)
+		$('#saveExcel').click(function(){
+			DialogMessage ("exportExcel");
+			$( "#dialog-confirm" ).dialog({
+				resizable: false,
+	      height: "auto",
+	      width: 300,
+	      modal: true,
+	      buttons: {
+	        "확인": function() {
+	        	//Close Option Dialog Box
+						$( "#dialog-option").dialog ("close");
+
+						// 데이터 백업
+						db.fetchSearchExport({table:'listMovie'})
+	          $( this ).dialog( "close" );
+	        },
+	        "취소": function() {
+	          $( this ).dialog( "close" );
+	        }
+	      }
+	    });
+		});
+
+		// Button Click (검색)
+		$("#searchBtn").click(function(e){
+			var selKey = $("#selKey option:selected").val();
+			var selWrd = (selKey == "year") ? $("#years option:selected").val() : $("#tags").val();
+
+			if (selKey == cSelKey && selWrd == cSelWrd) {
+				msg_log("검색 조건이 같아서 검색을 하지 않습니다.");
+			} else {
+				cSelKey = selKey;
+				cSelWrd = selWrd;
+
+				db.fetchSearch({table:'listMovie', column:selKey, searchword:selWrd})
+			}
+		});
+
+		// Button Click (option)
+		$("#option").click(function(e){
+			$( "#dialog-option").dialog({
+				resizable: false,
+	      height: "auto",
+	      width: 300,
+	      modal: true,
+	      buttons: {
+	        "닫기": function() {
+	          $( this ).dialog( "close" );
+	        }
+	      }
+	    });
+		});
+
+		// Button Click (초기화)
+		$("#dbInit").click(function(e){
+			DialogMessage ("initTable");
+			$( "#dialog-confirm" ).dialog({
+				resizable: false,
+	      height: "auto",
+	      width: 300,
+	      modal: true,
+	      buttons: {
+	        "확인": function() {
+	        	//Close Option Dialog Box
+						$( "#dialog-option").dialog ("close");
+
+						// Table Clear
+						clearTable()
+						$("#tblBody tr").remove();
+	          $( this ).dialog( "close" );
+	        },
+	        "취소": function() {
+	          $( this ).dialog( "close" );
+	        }
+	      }
+	    });
+		});
+
+		// Button Click (새로고침)
+		$("#scrReload").click(function(e){
+			location.reload();
+		});
+
+		$("input").on("keyup", function(key){
+			if(key.keyCode==13) {
+				msg_log("function input keyup(13)")
+				$("#searchBtn").trigger('click');
+			}
+    });
+
+		$('#selKey').change(function(e){
+			if (e.target.value == "year") {
+				if($("#years options").size() == 0) {
+					$("#years").append("<option value=''>전체</option>");
+					$.each(aYear.sort(function(a, b){return b-a}), function(key, e){
+						$("#years").append("<option value='" + e + "'>" + e + "</option>");
+					});
+				}
+				$("#tags").hide();
+				$("#years").show();
+			} else {
+				$("#years").hide();
+				$("#tags").show();
+
+				switch(e.target.value) {
+					case 'country':
+						$( "#tags" )
+							.autocomplete({source: aCountry});
+						break;
+					case 'director':
+						$( "#tags" )
+							.autocomplete({source: aDirector});
+						break;
+					case 'actor':
+						$( "#tags" )
+							.autocomplete({
+								source: aActor,
+								focus : function(event, ui) {
+									return false;
+								},
+								delay: 100
+							});
+						break;
+					default :
+						try {$( "#tags" ).autocomplete("disable");} catch(e){}
+				}
+			}
+			$( "#tags" ).val("");
+		});
+
+		$( "#dialog").dialog({
+			autoOpen: false,
+			modal: true,
+			width: 400,
+			buttons: [
+				{
+					text: "닫기",
+					click: function() {
+						$( this ).dialog( "close" );
+					}
+				}
+			]
+		});
+
+    $("#progressbar").progressbar({
+      value: false,
+      change: function() {
+        $(".progress-label").text($("#progressbar").progressbar("value") + "%" );
+      },
+      complete: function() {
+        $(".progress-label").text("Loading Complete!");
+        setTimeout(
+        	function() {
+//						init_work();
+						$("#dialog").dialog("close");
+						fn_clear_file_value("#files");
+					},
+					1000
+				);
+      }
+    });
+	});
+
+	function fn_clear_file_value(e_obj) {
+		var agent = navigator.userAgent.toLowerCase();
+
+		if (agent.indexOf("msie") != -1) {
+			// ie 일때 input[type=file] init.
+			$(e_obj).replaceWith( $("#filename").clone(true) );
+		} else {
+			// other browser ?϶? input[type=file] init.
+			$(e_obj).val("");
+		}
+	}
+
+	function fn_redraw_tbody(e_obj) {
+		msg_log("  > 검색결과 : " + e_obj.length)
+		msg_log("  > 검색 키 : " + cSelKey)
+		msg_log("  > 검색 값 : " + cSelWrd)
+
+		// 영화목록을 읽어온다.
+		$("#tblBody tr").remove();
+
+		$.each(e_obj, function(key, e){
+			var row = $("<tr class='trclass'></tr>")
+					row.append($("<td class='image'>" + (key + 1) + "</td>"));
+					row.append($("<td class='year'>" + e.year + "</td>"));
+					row.append($("<td class='title'>" + e.titleKor + "</td>"));
+					row.append($("<td class='country'>" + e.country + "</td>"));
+					row.append($("<td class='director'>" + e.director + "</td>"));
+					row.append($("<td class='actor'>" + e.actor + "</td>"));
+			$("#tblBody").append(row);
+		});
+
+		/*
+			tblBody의 row는 Append로 생성이 되었으므로
+			("#tblBody tr").click(function(){})
+			위와 같은 구문처리가 정상적으로 되지 않는다.
+			아래와 같이 처리해야 한다.
+		*/
+		$("#tblBody").on("click", ".trclass", function(e) {
+    	e.preventDefault();
+    	e.stopPropagation();
+
+			var td		= $(this).children();
+			var sRow	= td.eq(0).text();
+
+			if (cRow != sRow) {
+				cRow = sRow;
+
+				msg_log("function tBody row Click");
+				msg_log("  > 순번 : " + td.eq(0).text());
+				msg_log("  > 년도 : " + td.eq(1).text());
+				msg_log("  > 제목 : " + td.eq(2).text());
+				msg_log("  > 국가 : " + td.eq(3).text());
+				msg_log("  > 감독 : " + td.eq(4).text());
+				msg_log("  > 배우 : " + td.eq(5).text());
+			}
+		})
+
+		$(".trclass").hover(
+			function () {
+				$(this).addClass("focushover");
+				var $this = $(this);
+    		$this.data('bgcolor', $this.css('background-color')).css('background-color', '#5091F1');
+			},
+				function () {
+					$(this).removeClass("focushover");
+					var $this = $(this);
+      		$this.css('background-color', $this.data('bgcolor'));
+			}
+		);
+
+		// 테이블 정리를 위해서 데이터 갱신
+		$("#tblMovie").trigger('update');
+	}
+
+  //콤마찍기
+  function commaNumber(str) {
+      str = String(str);
+      return str.replace(/(\d)(?=(?:\d{3})+(?!\d))/g, '$1,');
+  }
+
+	function byteCalculation(bytes) {
+		var bytes = parseInt(bytes);
+		var s = ['bytes', 'KB', 'MB', 'GB', 'TB', 'PB'];
+		var e = Math.floor(Math.log(bytes)/Math.log(1024));
+
+		if(e == "-Infinity") return "0 "+s[0];
+		else
+			return (bytes/Math.pow(1024, Math.floor(e))).toFixed(2)+" "+s[e];
+	}
+
+	function clearTable() {
+		db.clear({table:"listMovie"});
+	}
+
+	function DialogMessage(eType) {
+		var rVal = true;
+		var sSpan = '<span class="ui-icon ui-icon-alert" style="float:left; margin:12px 12px 20px 0;"></span>';
+
+		switch(eType) {
+			case 'exportExcel' :
+				$("#dialog-confirm").attr('title', '데이터 백업');
+				$("#dialog-confirm  p").html(sSpan + '전체 데이터를 Excel로 백업합니다.');
+				break;
+
+			case 'initTable' :
+				$("#dialog-confirm").attr('title', '데이터 초기화');
+				$("#dialog-confirm  p").html(sSpan + '데이터가 삭제되고, 초기화 됩니다.!');
+				break;
+
+			case 'errorTable' :
+				$("#dialog-confirm").attr('title', '데이터 읽기');
+				$("#dialog-confirm  p").html(sSpan + '지정된 데이터 파일 형식이 아니거나,<br>데이터가 없습니다.');
+				break;
+		}
+	}
+
+	// Console.log
+	function msg_log(strMsg) {
+		console.log(dateFormat(new Date($.now())) + " : " + strMsg)
+	}
+
+	function dateFormat(date) {
+		let month = date.getMonth() + 1;
+		let day = date.getDate();
+		let hour = date.getHours();
+		let minute = date.getMinutes();
+		let second = date.getSeconds();
+
+		month = month >= 10 ? month : '0' + month;
+		day = day >= 10 ? day : '0' + day;
+		hour = hour >= 10 ? hour : '0' + hour;
+		minute = minute >= 10 ? minute : '0' + minute;
+		second = second >= 10 ? second : '0' + second;
+
+		return date.getFullYear() + '-' + month + '-' + day + ' ' + hour + ':' + minute + ':' + second;
+	}
+</script>
+
+<!-- Search Area & Header -->
+<div style='width:100%'>
+<table style='width:100%' border=0>
+	<tr>
+		<Td></Td>
+		<Td width=80px>
+			<select style='width:80px;height:24px;' id='selKey'>
+				<option value='title'>제목</option>
+				<option value='year'>년도</option>
+				<option value='country'>국가</option>
+				<option value='director'>감독</option>
+				<option value='actor'>배우</option>
+			</select>
+		</Td>
+		<Td width=150px>
+			<input type=text id='tags' style='width:150px;height:18px;'>
+			<select id='years' style='width:158px;display:none;height:24px;'></select>
+		</Td>
+		<Td width=140px>
+			<input type=button value='검색' style='width:50px;' id='searchBtn'>
+			<input type=button value='새로고침' style='width:80px;' id='scrReload'>
+		</Td>
+		<Td width=20px valign="center" align="center">
+			<img width=20 height=20 title='Option' id='option' src='./img/setting.png' style='cursor:pointer'>
+		</Td>
+	</tr>
+</table>
+</div>
+
+<!-- Table Content -->
+<div style='width:100%;margin-top:5px;'>
+<div style="position:relative;">
+	<table id='hTable' class="list">
+		<thead>
+			<tr class="1tablesorter-headerRow">
+				<th scope="col" width="50" class="thFirst">순번</th>
+				<th scope="col" width="50">년도</th>
+				<th scope="col" width="200">제목</th>
+				<th scope="col" width="100">국가</th>
+				<th scope="col" width="200">감독</th>
+				<th scope="col">배우</th>
+			</tr>
+		</thead>
+	</table>
+</div>
+<div id="_listDiv">
+	<table id='tblMovie' class="list tablesorter" style='table-layout:fixed'>
+		<colgroup>
+			<col width=60></col>
+			<col width=60></col>
+			<col width=210></col>
+			<col width=110></col>
+			<col width=210></col>
+			<col></col>
+		</colgroup>
+		<thead style=';display:none'>
+			<tr>
+				<th scope="col" width="50" class="thFirst">순번</th>
+				<th scope="col" width="50">년도</th>
+				<th scope="col" width="200">제목</th>
+				<th scope="col" width="100">국가</th>
+				<th scope="col" width="200">감독</th>
+				<th scope="col">배우</th>
+			</tr>
+		</thead>
+		<tbody id="tblBody"></tbody>
+	</table>
+</div>
+</div>
+
+<!-- Dialog Box -->
+<div id="dialog" title="Movie Data Loading" style='visible:hide'>
+	<p>Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.</p>
+	<div id="progressbar"><div class="progress-label">Loading...</div></div>
+</div>
+
+<div id="dialog-confirm" title="" style='display:none'>
+  <p><span class="ui-icon ui-icon-alert" style="float:left; margin:12px 12px 20px 0;"></span></p>
+</div>
+
+<div id="dialog-option" title="Option" style='display:none'>
+  <Table style='width:100%' border=0>
+  	<tr><Td>1. Excel Data를 읽어서 Indexed DB에 저장합니다.</td></tr>
+  	<tr><Td style='padding:5px 0px 5px 10px'><input type="file" id="files" name="files"></td></tr>
+  	<tr><Td>2. Indexed DB내용을 Excel로 저장합니다.</td></tr>
+  	<tr><Td style='padding:5px 0px 5px 10px'><input type=button value='백업' style='width:50px;' id='saveExcel'></td></tr>
+  	<tr><Td>3. Indexed DB내용을 삭제합니다.</td></tr>
+  	<tr><Td style='padding:5px 0px 0px 10px'><input type=button value='초기화' style='width:50px;' id='dbInit'></td></tr>
+  </Table>
+</div>
